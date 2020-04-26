@@ -2,7 +2,7 @@ class LinebotsController < ApplicationController
   require 'line/bot'
 
   # callbackアクションのCSRFトークン認証を無効
-  protect_from_forgery :except => [:callback]
+  protect_from_forgery except: [:callback]
 
   def callback
     body = request.body.read
@@ -18,9 +18,9 @@ class LinebotsController < ApplicationController
         when Line::Bot::Event::MessageType::Text
           # 入力した文字をinputに格納
           input = event.message['text']
-          # search_and_create_messageメソッド内で、AmazonAPIを用いた商品検索、メッセージの作成を行う
-          messages = search_and_create_messages(input)
-          client.reply_message(event['replyToken'], messages)
+          # search_and_create_messageメソッド内で、楽天APIを用いた商品検索、メッセージの作成を行う
+          message = search_and_create_message(input)
+          client.reply_message(event['replyToken'], message)
         end
       end
     end
@@ -36,56 +36,41 @@ class LinebotsController < ApplicationController
     end
   end
 
-  def search_and_create_messages(keyword)
-    # AmazonAPIの仕様上、ALLジャンルからのランキングの取得はできないので、
-    # ALLジャンルで商品検索→最初に出力された商品のジャンルを取得し、
-    # そのジャンル内でのランキングを再度取得する。
-    # つまり、2度APIを利用する
-    request = Vacuum.new(marketplace: 'JP',
-                         access_key: ENV['AMAZON_API_ACCESS_KEY'],
-                         secret_key: ENV['AMAZON_API_SECRET_KEY'],
-                         partner_tag: ENV['ASSOCIATE_TAG'])
-
-    # ジャンルIDを取得する
-    res1 = request.search_items(keywords: keyword,
-                                resources: ['BrowseNodeInfo.BrowseNodes']).to_h
-    browse_node_no = res1.dig('SearchResult', 'Items').first.dig('BrowseNodeInfo', 'BrowseNodes').first.dig('Id')
-
-    # ジャンルÎD内でのランキングを取得する
-    # ジャンルIDを指定するとデフォルトで売上順になる（↓に記載）
-    # https://docs.aws.amazon.com/AWSECommerceService/latest/DG/APPNDX_SortValuesArticle.html
-    res2 = request.search_items(keywords: keyword,
-                                browse_node_id: browse_node_no,
-                                resources: ['ItemInfo.Title', 'Images.Primary.Large', 'Offers.Listings.Price']).to_h
-    items = res2.dig('SearchResult', 'Items')
-
+  def search_and_create_message(input)
+    RakutenWebService.configure do |c|
+      c.application_id = ENV['RAKUTEN_APPID']
+      c.affiliate_id = ENV['RAKUTEN_AFID']
+    end
+    # 楽天の商品検索APIで画像がある商品の中で、入力値で検索して上から3件を取得する
+    # 商品検索+ランキングでの取得はできないため標準の並び順で上から3件取得する
+    res = RakutenWebService::Ichiba::Item.search(keyword: input, hits: 3, imageFlag: 1)
+    items = []
+    # 取得したデータを使いやすいように配列に格納し直す
+    items = res.map{|item| item}
     make_reply_content(items)
   end
 
-  # LINE公式のFlex Message Simulator(https://developers.line.me/console/fx/)でShoppingのテーマをベースに作成
-  # 細かい仕様はLINE公式ドキュメント(https://developers.line.me/ja/docs/messaging-api/using-flex-messages/)ご参照
   def make_reply_content(items)
     {
-      "type": "flex",
-      "altText": "This is a Flex Message",
+      "type": 'flex',
+      "altText": 'This is a Flex Message',
       "contents":
       {
-        "type": "carousel",
+        "type": 'carousel',
         "contents": [
-          make_part(items[0], 1),
-          make_part(items[1], 2),
-          make_part(items[2], 3)
+          make_part(items[0]),
+          make_part(items[1]),
+          make_part(items[2])
         ]
       }
     }
   end
 
-
-  def make_part(item, rank)
-    title = item.dig('ItemInfo', 'Title', 'DisplayValue')
-    price = item.dig('Offers', 'Listings').first.dig('Price', 'DisplayAmount')
-    url = item.dig('DetailPageURL')
-    image = item.dig('Images', 'Primary', 'Large', 'URL')
+  def make_part(item)
+    title = item['itemName']
+    price = item['itemPrice'].to_s + '円'
+    url = item['itemUrl']
+    image = item['mediumImageUrls'].first
     {
       "type": "bubble",
       "hero": {
@@ -101,14 +86,6 @@ class LinebotsController < ApplicationController
         "layout": "vertical",
         "spacing": "sm",
         "contents": [
-          {
-            "type": "text",
-            "text": "#{rank}位",
-            "wrap": true,
-            "margin": "md",
-            "color": "#ff5551",
-            "flex": 0
-          },
           {
             "type": "text",
             "text": title,
@@ -128,8 +105,7 @@ class LinebotsController < ApplicationController
                 "flex": 0
               }
             ]
-          }
-        ]
+          }                      ]
       },
       "footer": {
         "type": "box",
@@ -141,7 +117,7 @@ class LinebotsController < ApplicationController
             "style": "primary",
             "action": {
               "type": "uri",
-              "label": "Amazon商品ページへ",
+              "label": "楽天商品ページへ",
               "uri": url
             }
           }

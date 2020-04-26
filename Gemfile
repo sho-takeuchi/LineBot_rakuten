@@ -67,5 +67,5 @@ gem 'dotenv-rails'
 # ② LINE bot
 gem 'line-bot-api'
 
-# ③ Amazon API
-gem 'vacuum'
+# Amazon API を 楽天API に変更
+gem 'rakuten_web_service'
